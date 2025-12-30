@@ -1,15 +1,25 @@
 # run_render.py
 from camera.trajectory import generate_bullet_time_poses
-from render.load_ply import load_gaussians, estimate_target_from_ply
+from render.load_ply import load_gaussians, filter_by_radius, compute_pca_axes, random_sample, visualize_pca_axes
 from render.project_gaussians import project
 from render.render_frame import render
 from compose_video import compose_video
 import cv2
 
 xyz, color, opacity = load_gaussians("data/xiaohei.ply")
-target = estimate_target_from_ply(xyz, opacity)
+points = filter_by_radius(xyz, keep_ratio=0.6)
+center, eigvals, axes = compute_pca_axes(points)
+points_vis = random_sample(points, max_points=5000)
+visualize_pca_axes(
+    points_vis,
+    center,
+    axes,
+    eigvals,
+    scale=0.5
+)
+
 poses = generate_bullet_time_poses(
-    target=target,
+    target=center,
     radius=2.0,
     n_frames=60,
     height=0.2

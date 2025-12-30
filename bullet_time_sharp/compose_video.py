@@ -1,7 +1,7 @@
 import cv2
 import os
 
-def compose_video():
+def compose_video(video_name="bullet_time_sharp.mp4"):
     frames_dir = "frames"
     files = sorted(os.listdir(frames_dir))
 
@@ -9,7 +9,7 @@ def compose_video():
     H, W, _ = img0.shape
 
     out = cv2.VideoWriter(
-        "bullet_time_sharp.mp4",
+        video_name,
         cv2.VideoWriter_fourcc(*"mp4v"),
         24,
         (W, H)
@@ -20,3 +20,4 @@ def compose_video():
         out.write(img)
 
     out.release()
+    print(f"save video to {video_name}")
