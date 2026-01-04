@@ -46,7 +46,7 @@ def visualize_pca_axes(
     center,
     axes,
     eigvals,
-    scale=0.5
+    scale=1
 ):
     fig = plt.figure(figsize=(8, 8))
     ax = fig.add_subplot(111, projection='3d')

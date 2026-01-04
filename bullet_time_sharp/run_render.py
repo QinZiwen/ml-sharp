@@ -15,14 +15,15 @@ visualize_pca_axes(
     center,
     axes,
     eigvals,
-    scale=0.5
+    scale=1
 )
 
+main_axis = axes[:, 0]   # PCA 主轴
 poses = generate_bullet_time_poses(
     target=center,
+    main_axis=main_axis,
     radius=2.0,
-    n_frames=60,
-    height=0.2
+    n_frames=60
 )
 
 H, W = 256, 256
