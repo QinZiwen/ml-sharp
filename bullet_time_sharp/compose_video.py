@@ -5,7 +5,9 @@ def compose_video(video_name="bullet_time_sharp.mp4"):
     frames_dir = "frames"
     files = sorted(os.listdir(frames_dir))
 
-    img0 = cv2.imread(os.path.join(frames_dir, files[0]))
+    file_name = os.path.join(frames_dir, files[0])
+    print(f"file_name: {file_name}")
+    img0 = cv2.imread(file_name)
     H, W, _ = img0.shape
 
     out = cv2.VideoWriter(
@@ -21,3 +23,6 @@ def compose_video(video_name="bullet_time_sharp.mp4"):
 
     out.release()
     print(f"save video to {video_name}")
+
+if __name__ == "__main__":
+    compose_video()

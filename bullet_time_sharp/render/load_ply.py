@@ -4,7 +4,83 @@ from plyfile import PlyData
 import matplotlib.pyplot as plt
 from sklearn.neighbors import NearestNeighbors
 
+def quaternion_to_rotation_matrix(q):
+    """
+    q: (..., 4) quaternion, assumed format (w, x, y, z)
+    return: (..., 3, 3) rotation matrices
+    """
+    q = q / np.linalg.norm(q, axis=-1, keepdims=True)
+
+    w, x, y, z = q[..., 0], q[..., 1], q[..., 2], q[..., 3]
+
+    R = np.zeros(q.shape[:-1] + (3, 3), dtype=np.float32)
+
+    R[..., 0, 0] = 1 - 2 * (y * y + z * z)
+    R[..., 0, 1] = 2 * (x * y - z * w)
+    R[..., 0, 2] = 2 * (x * z + y * w)
+
+    R[..., 1, 0] = 2 * (x * y + z * w)
+    R[..., 1, 1] = 1 - 2 * (x * x + z * z)
+    R[..., 1, 2] = 2 * (y * z - x * w)
+
+    R[..., 2, 0] = 2 * (x * z - y * w)
+    R[..., 2, 1] = 2 * (y * z + x * w)
+    R[..., 2, 2] = 1 - 2 * (x * x + y * y)
+
+    return R
+
+
 def load_gaussians(ply_path):
+    """
+    Load 3D Gaussians from Sharp / 3DGS style PLY.
+
+    Returns:
+        xyz        : (N,3)
+        colors     : (N,3) in [0,1]
+        opacity    : (N,)
+        scales     : (N,3)
+        rotations  : (N,3,3)
+    """
+    ply = PlyData.read(ply_path)
+    v = ply["vertex"].data
+
+    # -------- positions --------
+    xyz = np.stack([v["x"], v["y"], v["z"]], axis=1).astype(np.float32)
+
+    # -------- scales (exp because stored in log-space in many 3DGS) --------
+    scales = np.stack(
+        [v["scale_0"], v["scale_1"], v["scale_2"]],
+        axis=1
+    ).astype(np.float32)
+
+    # Sharp / 3DGS: scale is usually log-space
+    scales = np.exp(scales)
+
+    # -------- opacity (sigmoid inverse stored) --------
+    opacity = v["opacity"].astype(np.float32)
+    opacity = 1.0 / (1.0 + np.exp(-opacity))
+
+    # -------- color (DC term only) --------
+    colors = np.stack(
+        [v["f_dc_0"], v["f_dc_1"], v["f_dc_2"]],
+        axis=1
+    ).astype(np.float32)
+
+    # clamp for safety
+    colors = 0.5 + colors * 0.282095
+    colors = np.clip(colors, 0.0, 1.0)
+
+    # -------- rotation (quaternion) --------
+    q = np.stack(
+        [v["rot_0"], v["rot_1"], v["rot_2"], v["rot_3"]],
+        axis=1
+    ).astype(np.float32)
+
+    rotations = quaternion_to_rotation_matrix(q)
+
+    return xyz, colors, opacity, scales, rotations
+
+def load_gaussians_base(ply_path):
     ply = PlyData.read(ply_path)
     v = ply['vertex']
     xyz = np.stack([v['x'], v['y'], v['z']], axis=1)
