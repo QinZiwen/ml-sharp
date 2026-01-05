@@ -182,30 +182,56 @@ def render(
     img = np.clip(img, 0.0, 1.0)
     return (img * 255).astype(np.uint8)
 
-import numpy as np
+# ---------- SH utilities (degree=2, 9 coeffs) ----------
+def eval_sh_basis(view_dir):
+    x, y, z = view_dir
+    return np.array([
+        0.282095,                         # l=0,m=0
+        -0.488603 * y,                    # l=1,m=-1
+         0.488603 * z,                    # l=1,m=0
+        -0.488603 * x,                    # l=1,m=1
+         1.092548 * x * y,                # l=2,m=-2
+        -1.092548 * y * z,                # l=2,m=-1
+         0.315392 * (3*z*z - 1),           # l=2,m=0
+        -1.092548 * x * z,                # l=2,m=1
+         0.546274 * (x*x - y*y),           # l=2,m=2
+    ], dtype=np.float32)
+
 
 def render_elliptical(
-    points_2d,      # (N, 3): x, y, z   (pixel x,y + depth z)
-    colors,         # (N, 3): RGB in [0,1]
+    points_2d,      # (N, 3): x, y, z
+    colors,         # (N,3) RGB  or  (N,9,3)/(N,3,9) SH
     opacity,        # (N,)
-    scales,         # (N, 3): sx, sy, sz (from ply, already exp()'ed)
-    rotations,      # (N, 3, 3): rotation matrix
+    scales,         # (N, 3)
+    rotations,      # (N, 3, 3)
     H, W,
     fx, fy
 ):
-    """
-    CPU reference anisotropic 3D Gaussian splatting (stable version)
-    """
+    import numpy as np
 
     img = np.zeros((H, W, 3), dtype=np.float32)
     acc_alpha = np.zeros((H, W), dtype=np.float32)
 
-    # front-to-back
-    idx = np.argsort(points_2d[:, 2])
+    idx = np.argsort(points_2d[:, 2])  # front-to-back
+
+    # SH basis（只有在需要时才用）
+    view_dir = np.array([0.0, 0.0, 1.0], dtype=np.float32)
+    x, y, z = view_dir
+    sh_basis = np.array([
+        0.282095,
+        0.488603 * y,
+        0.488603 * z,
+        0.488603 * x,
+        1.092548 * x * y,
+        1.092548 * y * z,
+        0.315392 * (3.0 * z * z - 1.0),
+        1.092548 * x * z,
+        0.546274 * (x * x - y * y)
+    ], dtype=np.float32)
 
     for i in idx:
-        px, py, z = points_2d[i]
-        if z <= 0:
+        px, py, depth = points_2d[i]
+        if depth <= 0:
             continue
 
         cx = int(round(px))
@@ -213,41 +239,48 @@ def render_elliptical(
         if cx < 0 or cx >= W or cy < 0 or cy >= H:
             continue
 
-        # ---------- 1. 3D covariance ----------
-        S = np.diag(scales[i] ** 2)     # variance, not sigma
-        R = rotations[i]
-        Sigma3D = R @ S @ R.T           # (3,3)
+        # ---------- 1. color ----------
+        c = colors[i]
 
-        # ---------- 2. Jacobian (stable approximation) ----------
-        # Ignore depth coupling terms (critical for stability)
+        if c.ndim == 1 and c.shape[0] == 3:
+            # 普通 RGB（你的真实情况）
+            color = c
+        else:
+            # SH（兼容用）
+            if c.shape == (9, 3):
+                color = c.T @ sh_basis
+            elif c.shape == (3, 9):
+                color = c @ sh_basis
+            else:
+                color = c.reshape(9, 3).T @ sh_basis
+
+        color = np.clip(color, 0.0, 1.0)
+
+        # ---------- 2. covariance ----------
+        S = np.diag(scales[i] ** 2)
+        R = rotations[i]
+        Sigma3D = R @ S @ R.T
+
         J = np.array([
-            [fx / z, 0.0,    0.0],
-            [0.0,    fy / z, 0.0]
+            [fx / depth, 0.0, 0.0],
+            [0.0, fy / depth, 0.0]
         ], dtype=np.float32)
 
-        Sigma2D = J @ Sigma3D @ J.T     # (2,2)
-
-        # ---------- 3. numerical stabilization ----------
+        Sigma2D = J @ Sigma3D @ J.T
         Sigma2D += np.eye(2) * 1e-6
-
         inv_Sigma2D = np.linalg.inv(Sigma2D)
 
-        # ---------- 4. bounding box ----------
         eigvals, _ = np.linalg.eigh(Sigma2D)
-        max_sigma = np.sqrt(np.max(eigvals))
-        radius = int(np.clip(3.0 * max_sigma, 2, 20))
+        radius = int(np.clip(3.0 * np.sqrt(np.max(eigvals)), 2, 20))
 
-        # ---------- 5. opacity normalization ----------
-        # approximate energy conservation
         det = np.linalg.det(Sigma2D)
         if det <= 0:
             continue
 
-        norm = 1.0 / (2.0 * np.pi * np.sqrt(det))
-        a0 = opacity[i] * norm
+        a0 = opacity[i] / (2.0 * np.pi * np.sqrt(det))
         a0 = np.clip(a0, 0.0, 1.0)
 
-        # ---------- 6. splatting ----------
+        # ---------- 3. splatting ----------
         for dy in range(-radius, radius + 1):
             iy = cy + dy
             if iy < 0 or iy >= H:
@@ -263,14 +296,13 @@ def render_elliptical(
 
                 d = np.array([dx, dy], dtype=np.float32)
                 w = np.exp(-0.5 * (d @ inv_Sigma2D @ d))
-
                 if w < 1e-5:
                     continue
 
                 a = a0 * w
                 contrib = a * (1.0 - acc_alpha[iy, ix])
 
-                img[iy, ix] += colors[i] * contrib
+                img[iy, ix] += color * contrib
                 acc_alpha[iy, ix] += contrib
 
     img = np.clip(img, 0.0, 1.0)
